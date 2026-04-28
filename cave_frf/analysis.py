@@ -21,34 +21,90 @@ import numpy as np
 import pandas as pd
 
 # -----------------------------------------------------------------------------
-# Stimulus model — confirmed from Unity formula:
-#   D(t) = A · [1.0·sin(2π·0.16·t) + 0.8·sin(2π·0.21·t)
-#             + 1.4·sin(2π·0.24·t) + 0.5·sin(2π·0.49·t)]
-#   where A = trial scaling factor (0.04 / 0.08 standing, 0.05/.../0.35 walking)
+# Experiment configuration
+#
+# All experiment-specific parameters (stimulus frequencies, weights, phases,
+# trial duration, axis-mapping rules) live in a YAML config file under
+# configs/. The default config (configs/cave.yaml) describes the CAVE study;
+# other labs can copy it and edit the values for their protocol.
+#
+# The module-level constants STIM_FREQS_HZ, COMPONENT_WEIGHTS, etc. are
+# populated from the active config and exposed for backward compatibility
+# with code that imports them directly. Use load_config(path) to switch to
+# a different study config at runtime.
 # -----------------------------------------------------------------------------
-TRIAL_DURATION_S = 120.0
-STIM_FREQS_HZ      = (0.16, 0.21, 0.24, 0.49)
-COMPONENT_WEIGHTS  = (1.0,  0.8,  1.4,  0.5)
-COMPONENT_PHASES   = (0.0,  0.0,  0.0,  0.0)   # zero per Unity formula
-N_COMPONENTS = len(STIM_FREQS_HZ)
 
-# Stimulus axis per condition. Standing: visual scene moves AP
-# (anterior-posterior). Walking: visual scene moves ML (mediolateral).
-# COP_X is recorded as ML, COP_Y as AP.
-STIM_AXIS_BY_CONDITION = {
-    'standing': 'AP',
-    'walking':  'ML',
-}
-AXIS_TO_COP_COLUMN = {'AP': 'cop_y', 'ML': 'cop_x'}
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / 'configs' / 'cave.yaml'
+
+
+def load_config(path=None):
+    """
+    Load an experiment config from a YAML file. If path is None, loads the
+    bundled default (configs/cave.yaml).
+
+    Returns a dict with the config contents. Also updates the module-level
+    constants so existing code that imports them keeps working.
+    """
+    import yaml
+    cfg_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Config file not found: {cfg_path}")
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
+    # Validate that frequencies / weights / phases all have the same length
+    stim = cfg.get('stimulus', {})
+    n = len(stim.get('frequencies_hz', []))
+    for key in ('weights', 'phases_rad'):
+        if len(stim.get(key, [])) != n:
+            raise ValueError(
+                f"Config error: stimulus.{key} must have the same length as "
+                f"stimulus.frequencies_hz (got {len(stim.get(key, []))} vs {n})"
+            )
+    if n == 0:
+        raise ValueError("Config error: stimulus.frequencies_hz cannot be empty")
+
+    # Update module-level constants so existing code keeps working
+    global TRIAL_DURATION_S, STIM_FREQS_HZ, COMPONENT_WEIGHTS, COMPONENT_PHASES
+    global N_COMPONENTS, STIM_AXIS_BY_CONDITION, _ACTIVE_CONFIG
+    TRIAL_DURATION_S       = float(stim['trial_duration_s'])
+    STIM_FREQS_HZ          = tuple(stim['frequencies_hz'])
+    COMPONENT_WEIGHTS      = tuple(stim['weights'])
+    COMPONENT_PHASES       = tuple(stim['phases_rad'])
+    N_COMPONENTS           = n
+    STIM_AXIS_BY_CONDITION = dict(cfg.get('stim_axis_by_condition', {}))
+    _ACTIVE_CONFIG         = cfg
+    return cfg
+
+
+def get_active_config():
+    """Return the currently-loaded config dict (read-only — don't mutate)."""
+    return _ACTIVE_CONFIG
+
+
+# Module-level constants populated by load_config(). These are placeholders
+# until load_config() runs at module import time below.
+TRIAL_DURATION_S       = 120.0
+STIM_FREQS_HZ          = ()
+COMPONENT_WEIGHTS      = ()
+COMPONENT_PHASES       = ()
+N_COMPONENTS           = 0
+STIM_AXIS_BY_CONDITION = {}
+AXIS_TO_COP_COLUMN     = {'AP': 'cop_y', 'ML': 'cop_x'}
+_ACTIVE_CONFIG         = None
+
+# Load the default (CAVE) config at import time. Callers can switch configs
+# by calling load_config(path) explicitly.
+load_config()
 
 
 def build_stimulus(trial_amplitude_m, n_samples, fs):
     """
-    Reconstruct the AP visual-scene stimulus from the Unity formula.
+    Reconstruct the stimulus time-series from the active configuration.
 
     Returns
     -------
-    stim : ndarray of shape (n_samples,), AP displacement in meters
+    stim : ndarray of shape (n_samples,), in meters of visual-scene displacement
     """
     if trial_amplitude_m == 0:
         return np.zeros(n_samples)
