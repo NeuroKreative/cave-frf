@@ -1,0 +1,56 @@
+# CAVE Adult Stimulus Factor study — default experiment configuration.
+#
+# This file describes the visual perturbation stimulus and the
+# axis-mapping rules for the CAVE study. The pipeline loads this file
+# by default; no edits needed if you're running the CAVE protocol.
+#
+# To adapt the pipeline for a different study, copy this file to a new
+# name (e.g., my_study.yaml), edit the values to match your protocol, and
+# point the pipeline at the new file via the UI sidebar or the
+# --config flag on the CLI.
+
+study_name: "CAVE Adult Stimulus Factor Trial"
+
+# ---------------------------------------------------------------------------
+# Stimulus model
+#
+# The visual scene moves according to:
+#     D(t) = A · Σᵢ wᵢ · sin(2π · fᵢ · t + φᵢ)
+# where:
+#     A  = trial scaling factor (set per-trial via the trial-order file)
+#     fᵢ = frequencies below
+#     wᵢ = weights below
+#     φᵢ = phases below (0 for all components in the CAVE study)
+#
+# `frequencies`, `weights`, and `phases` must all have the same length.
+# You can use any number of components (3, 4, 5, etc.).
+# ---------------------------------------------------------------------------
+stimulus:
+  frequencies_hz: [0.16, 0.21, 0.24, 0.49]
+  weights:        [1.0,  0.8,  1.4,  0.5]
+  phases_rad:     [0.0,  0.0,  0.0,  0.0]
+  trial_duration_s: 120.0
+
+# ---------------------------------------------------------------------------
+# Axis-mapping rules
+#
+# Tells the pipeline which COP axis the visual stimulus moves in for each
+# condition, so it knows which axis to analyze as the "stim-matched" one.
+#
+# Allowed values: "AP" (anterior-posterior, COP_Y) or "ML" (mediolateral,
+# COP_X).
+# ---------------------------------------------------------------------------
+stim_axis_by_condition:
+  standing: AP
+  walking:  ML
+
+# ---------------------------------------------------------------------------
+# Trial-amplitude validation (optional but recommended)
+#
+# Lists of allowed amplitude values per condition. The pipeline warns if
+# a trial-order file specifies an amplitude not in these lists. Set to
+# null to skip validation.
+# ---------------------------------------------------------------------------
+allowed_amplitudes_m:
+  standing: [0.00, 0.04, 0.08]
+  walking:  [0.00, 0.05, 0.15, 0.25, 0.35]

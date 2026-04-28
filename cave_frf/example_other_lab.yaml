@@ -1,0 +1,26 @@
+# Example experiment config for a hypothetical other study.
+#
+# This is a template showing how to adapt the pipeline for a different
+# protocol. Copy this file to a new name (e.g., my_lab.yaml), edit the
+# values, and load it via the UI sidebar or --config on the CLI.
+#
+# The CAVE pipeline supports any number of stimulus components and
+# arbitrary frequency/weight/phase combinations.
+
+study_name: "Example: 3-component stimulus, eyes-closed standing only"
+
+stimulus:
+  # Three components instead of four — illustrates the open N support
+  frequencies_hz: [0.20, 0.30, 0.50]
+  weights:        [1.0,  0.7,  0.4]
+  phases_rad:     [0.0,  0.0,  0.0]
+  trial_duration_s: 90.0       # shorter trials than CAVE's 120 s
+
+stim_axis_by_condition:
+  # All conditions analyze AP in this hypothetical study
+  eyes_closed_standing: AP
+  eyes_open_standing:   AP
+
+allowed_amplitudes_m:
+  eyes_closed_standing: [0.00, 0.05, 0.10]
+  eyes_open_standing:   [0.00, 0.05, 0.10]
