@@ -142,6 +142,69 @@ Concussion_001_Acute
     assert e.amplitude_m == 0.08 and e.condition == 'standing'
 
 
+def test_config_loading():
+    """Loading a different config should change the stimulus model."""
+    import tempfile, textwrap
+    from cave_frf import load_config
+    from cave_frf import analysis as A
+
+    # Snapshot original (CAVE) values
+    orig_freqs = A.STIM_FREQS_HZ
+    orig_n = A.N_COMPONENTS
+
+    # Write a 3-component config to a temp file
+    cfg_text = textwrap.dedent("""\
+        study_name: "Test 3-component"
+        stimulus:
+          frequencies_hz: [0.2, 0.3, 0.5]
+          weights:        [1.0, 0.5, 0.25]
+          phases_rad:     [0.0, 0.0, 0.0]
+          trial_duration_s: 60.0
+        stim_axis_by_condition:
+          quiet_standing: AP
+        """)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        f.write(cfg_text)
+        path = f.name
+
+    load_config(path)
+    assert A.N_COMPONENTS == 3
+    assert A.STIM_FREQS_HZ == (0.2, 0.3, 0.5)
+    assert A.TRIAL_DURATION_S == 60.0
+    assert A.STIM_AXIS_BY_CONDITION == {'quiet_standing': 'AP'}
+
+    # Restore CAVE defaults so other tests aren't polluted
+    load_config()  # reloads default
+    assert A.STIM_FREQS_HZ == orig_freqs
+    assert A.N_COMPONENTS == orig_n
+
+
+def test_config_validation():
+    """Mismatched-length lists should raise."""
+    import tempfile, textwrap
+    from cave_frf import load_config
+
+    cfg_text = textwrap.dedent("""\
+        stimulus:
+          frequencies_hz: [0.2, 0.3]
+          weights:        [1.0]            # wrong length
+          phases_rad:     [0.0, 0.0]
+          trial_duration_s: 60.0
+        """)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        f.write(cfg_text)
+        path = f.name
+
+    raised = False
+    try:
+        load_config(path)
+    except ValueError:
+        raised = True
+    assert raised, "load_config should raise ValueError on mismatched lengths"
+
+    load_config()  # restore default
+
+
 if __name__ == '__main__':
     tests = [v for k, v in globals().items() if k.startswith('test_')]
     failed = 0
