@@ -170,9 +170,9 @@ elif trial_upload is not None:
 # ---------------------------------------------------------------------------
 st.markdown("### 2 — Data folder")
 cop_dir = st.text_input(
-    "Path to top-level COM Data folder",
+    "Path to top-level COM Data folder on your machine",
     value=st.session_state.last_cop_dir,
-    placeholder="/Users/yourname/Google Drive/CAVE/COM Data",
+    placeholder="/Users/yourname/CAVE/COM Data",
     help="The folder that contains Standing/ and Walking/ subdirectories.",
 )
 
