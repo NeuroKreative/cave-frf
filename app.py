@@ -5,7 +5,8 @@ For students/lab members. Run with:
     streamlit run app.py
 
 Then your browser opens at http://localhost:8501. Point at a folder of
-COP files, click Run, see plots, download CSVs. All processing is local.
+CAVE data files (COP for standing, COM for walking — auto-detected), click
+Run, see plots, download CSVs. All processing is local.
 """
 from pathlib import Path
 import tempfile
@@ -128,9 +129,9 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 st.title("CAVE Gain / Phase Analysis")
 st.caption(
-    "Drop in a folder of COP files, get gain, phase, coherence, and summary "
-    "sway metrics per trial. All processing happens on this computer — "
-    "nothing is uploaded anywhere."
+    "Drop in a folder of CAVE data files (COP for standing, COM for walking), "
+    "get gain, phase, coherence, and summary sway metrics per trial. All "
+    "processing happens on this computer — nothing is uploaded anywhere."
 )
 
 
@@ -170,10 +171,11 @@ elif trial_upload is not None:
 # ---------------------------------------------------------------------------
 st.markdown("### 2 — Data folder")
 cop_dir = st.text_input(
-    "Path to top-level COM Data folder on your machine",
+    "Path to top-level CAVE Data folder",
     value=st.session_state.last_cop_dir,
-    placeholder="/Users/yourname/CAVE/COM Data",
-    help="The folder that contains Standing/ and Walking/ subdirectories.",
+    placeholder="/Users/yourname/Google Drive/CAVE/COM Data",
+    help="The folder that contains Standing/ (COP files) and Walking/ "
+         "(COM files) subdirectories. Both file types are auto-detected.",
 )
 
 files_found = []
@@ -189,15 +191,20 @@ if cop_dir and Path(cop_dir).exists():
         df_files['condition'] = df_files['condition_from_path'].fillna('?')
         breakdown = (
             df_files
-            .groupby(['condition', 'group', 'timepoint'])
+            .groupby(['condition', 'file_type', 'group', 'timepoint'])
             .size()
             .reset_index(name='n_files')
         )
-        st.success(f"Found **{len(files_found)}** COP files")
-        with st.expander("Breakdown by condition / group / timepoint"):
+        n_cop = (df_files['file_type'] == 'COP').sum()
+        n_com = (df_files['file_type'] == 'COM').sum()
+        st.success(
+            f"Found **{len(files_found)}** data files "
+            f"({n_cop} COP / standing, {n_com} COM / walking)"
+        )
+        with st.expander("Breakdown by condition / file type / group / timepoint"):
             st.dataframe(breakdown, hide_index=True, use_container_width=True)
     else:
-        st.warning("No CAVE COP files found in that folder.")
+        st.warning("No CAVE data files found in that folder.")
 elif cop_dir:
     st.error(f"Folder does not exist: {cop_dir}")
 
@@ -247,7 +254,7 @@ if not ready:
     if trial_order_path is None:
         st.info("⬆ Upload or select a trial-order file")
     elif not files_found:
-        st.info("⬆ Point at a data folder containing COP files")
+        st.info("⬆ Point at a data folder containing CAVE COP / COM files")
 
 if run_clicked:
     progress_bar = st.progress(0.0, text="Starting...")
@@ -257,7 +264,7 @@ if run_clicked:
                               text=f"Processing {name} ({i}/{n})")
 
     frf_df, summary_df = run_pipeline(
-        cop_dir=cop_dir,
+        data_dir=cop_dir,
         trial_order_path=trial_order_path,
         output_csv=str(frf_cache),
         summary_csv=str(summary_cache),
