@@ -5,7 +5,11 @@ from .analysis import (
     TrialEntry,
     parse_trial_order,
     lookup_amplitude,
+    parse_filename,
+    FILENAME_PATTERN,
     load_cop_file,
+    load_com_file,
+    load_trial_file,
     load_stimulus_file,
     build_stimulus,
     compute_frf,
@@ -19,4 +23,4 @@ from .analysis import (
 )
 from . import plots
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
