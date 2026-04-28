@@ -30,6 +30,17 @@ You only have to do this once per computer.
 5. Click **Install Now** and wait for it to finish.
 6. Close any open terminals/PowerShell windows.
 
+> ⚠️ **Don't install Python from the Microsoft Store.** Windows 10/11 ships
+> with a placeholder named `python` that, when you run it, opens the
+> Microsoft Store and offers to install Python from there. The Store version
+> often has permission issues that break virtual environments. Always
+> install from python.org instead.
+>
+> If you've already accidentally installed the Store version, uninstall it
+> via Settings → Apps → Installed apps, then disable the placeholder via
+> **Settings → Apps → Advanced app settings → App execution aliases** (turn
+> off both `python.exe` and `python3.exe`), then install from python.org.
+
 ### On macOS
 
 The easiest path is **Anaconda**:
@@ -167,6 +178,21 @@ You only have to do this once per clone of the repo.
 Python isn't on your PATH. Easiest fix: reinstall Python and check the
 "Add to PATH" box during install (Windows) or use the Anaconda installer
 (macOS), which handles PATH for you.
+
+### Windows says "Python was not found; run without arguments to install from the Microsoft Store"
+
+This is the most common Windows install failure. You're seeing the Windows
+*placeholder* for Python, not real Python. Even if you've installed Python
+from python.org, the placeholder can take precedence on PATH.
+
+**Fix:**
+
+1. Disable the placeholder: **Settings → Apps → Advanced app settings →
+   App execution aliases** → turn OFF both `python.exe` and `python3.exe`
+2. If you haven't yet installed Python from python.org, do that now —
+   making sure to check **"Add python.exe to PATH"** during install
+3. Close all PowerShell/Command Prompt windows
+4. Open a fresh one and run `run.bat` again
 
 ### "ssl module is not available" or pip can't connect
 
