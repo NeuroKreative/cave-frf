@@ -2,16 +2,28 @@
 CAVE gain/phase analysis pipeline for visual perturbation experiments.
 
 Experimental design:
-    - Sum-of-sines visual stimulus, AP rotation about ankle axis
-    - 4 frequency components, integer cycles per 120-s trial
-    - Standing: amplitudes 0.00, 0.04, 0.08 (peak AP displacement of summed waveform)
-    - Walking:  amplitudes 0.00, 0.05, 0.15, 0.25, 0.35
-    - COP recorded at 1000 Hz, COP_Y is AP direction
-    - Stimulus and force-plate trigger-aligned at t=0
+    - Sum-of-sines visual stimulus
+    - 4 frequency components by default, integer cycles per 120-s trial
+    - Standing: AP visual perturbation; amplitudes 0.00, 0.04, 0.08
+    - Walking:  ML visual perturbation; amplitudes 0.00, 0.05, 0.15, 0.25, 0.35
+
+File formats supported (auto-detected from filename suffix):
+    - 'COP' files  (standing): Vicon force-plate export at 1000 Hz.
+                                Columns: Sample # | COP_X (ML) | COP_Y (AP).
+                                No logged stimulus — reconstructed from amplitude.
+    - 'COM' files  (walking):  Vicon motion-capture export at 100 Hz.
+                                Columns: Sample # | COMx (ML) | COMy (AP) | COMz |
+                                         Visual_Stim | GVS.
+                                Visual_Stim (col 5 in 1-indexed/MATLAB convention)
+                                is the ground-truth stimulus. GVS is logged but
+                                not used by the FRF analysis (visual-only protocol).
+
+Filenames may use spaces or underscores around the dash separator and may
+have any suffix after COP/COM (e.g. '_Export'); these are normalized away.
 
 Outputs:
-    - FRF (gain, phase) at each stimulus frequency, per trial
-    - Tidy CSV with one row per (subject, timepoint, condition, amplitude, frequency)
+    - FRF (gain, phase, coherence) at each stimulus frequency, per trial
+    - Tidy CSV with one row per (subject, timepoint, condition, amplitude, frequency, axis)
 """
 
 from dataclasses import dataclass
@@ -96,6 +108,67 @@ _ACTIVE_CONFIG         = None
 # Load the default (CAVE) config at import time. Callers can switch configs
 # by calling load_config(path) explicitly.
 load_config()
+
+
+# -----------------------------------------------------------------------------
+# Filename parsing
+#
+# CAVE files come in two flavors: COP (standing, force-plate) and COM (walking,
+# motion-capture). Vicon exports them with a space-and-dash separator and an
+# optional '_Export' suffix:
+#     CAVE_Control_001_Acute_6 - COP.txt
+#     CAVE_Concussion_004_Chronic_2 - COM_Export.txt
+# Older test data sometimes had underscores around the dash. Both are accepted.
+# -----------------------------------------------------------------------------
+FILENAME_PATTERN = re.compile(
+    r'CAVE_(Control|Concussion)_(\d+)_(Acute|SubAcute|Subacute|Chronic)_(\d+)'
+    r'[\s_]+-[\s_]+(COP|COM)[^.]*\.txt$',
+    re.IGNORECASE
+)
+
+
+def parse_filename(name):
+    """
+    Parse a CAVE filename into its components.
+
+    Accepts both Vicon's native format (spaces around the dash, optional
+    '_Export' suffix) and the underscore-separated variant used in some
+    older test data. The text after 'COP' or 'COM' is ignored.
+
+    Returns a dict with keys: group, subject_id, timepoint, trial_number,
+    file_type ('COP' or 'COM'). Returns None if the filename doesn't match.
+    """
+    m = FILENAME_PATTERN.match(name)
+    if not m:
+        return None
+    group, subj, tp, trial, ftype = m.groups()
+    tp = 'SubAcute' if tp.lower() == 'subacute' else tp
+    return {
+        'group':        group,
+        'subject_id':   int(subj),
+        'timepoint':    tp,
+        'trial_number': int(trial),
+        'file_type':    ftype.upper(),
+    }
+
+
+def _trim_or_pad(arr, n_target):
+    """Trim or zero-pad a 1-D array to exactly n_target samples."""
+    arr = np.asarray(arr, dtype=float)
+    if len(arr) > n_target:
+        return arr[:n_target]
+    if len(arr) < n_target:
+        return np.concatenate([arr, np.zeros(n_target - len(arr))])
+    return arr
+
+
+def _interpolate_nans(arr):
+    """In-place linear interpolation over NaNs in a 1-D float array."""
+    nans = np.isnan(arr)
+    if nans.any():
+        idx = np.arange(len(arr))
+        arr[nans] = np.interp(idx[nans], idx[~nans], arr[~nans])
+    return arr
 
 
 def build_stimulus(trial_amplitude_m, n_samples, fs):
@@ -218,34 +291,100 @@ def lookup_amplitude(entries, group, subject_id, timepoint, trial_number):
 
 
 # -----------------------------------------------------------------------------
-# COP file loading
+# Data file loading — COP (standing) and COM (walking)
 # -----------------------------------------------------------------------------
+def _read_header_and_fs(path, n_header=9):
+    """Read the header lines and parse the sampling rate from line 4."""
+    path = Path(path)
+    with open(path) as f:
+        header = [next(f) for _ in range(n_header)]
+    fs_match = re.search(r'([\d.]+)', header[3])
+    fs = float(fs_match.group(1)) if fs_match else None
+    return header, fs
+
+
 def load_cop_file(path):
     """
-    Load a CAVE COP_Export text file.
+    Load a CAVE COP file (standing trials, force-plate data at 1000 Hz).
+
+    Expected columns: Sample # | COP_X (ML) | COP_Y (AP).
+    The standing protocol does not log the stimulus signal — it must be
+    reconstructed from the trial amplitude using build_stimulus().
 
     Returns
     -------
     fs : float, sampling rate in Hz (parsed from header line 4)
-    cop_x, cop_y : ndarrays. NaNs are linearly interpolated.
+    cop_x : ndarray, ML response
+    cop_y : ndarray, AP response
     """
-    path = Path(path)
-    with open(path) as f:
-        header = [next(f) for _ in range(9)]
-    # Sampling rate is line 4 of header
-    fs_match = re.search(r'([\d.]+)', header[3])
-    fs = float(fs_match.group(1)) if fs_match else 1000.0
-
+    _, fs = _read_header_and_fs(path)
+    if fs is None:
+        fs = 1000.0
     data = np.loadtxt(path, skiprows=9)
-    cop_x = data[:, 1].astype(float)
-    cop_y = data[:, 2].astype(float)
-
-    for arr in (cop_x, cop_y):
-        nans = np.isnan(arr)
-        if nans.any():
-            idx = np.arange(len(arr))
-            arr[nans] = np.interp(idx[nans], idx[~nans], arr[~nans])
+    cop_x = _interpolate_nans(data[:, 1].astype(float))
+    cop_y = _interpolate_nans(data[:, 2].astype(float))
     return fs, cop_x, cop_y
+
+
+def load_com_file(path):
+    """
+    Load a CAVE COM file (walking trials, motion-capture at 100 Hz).
+
+    Expected columns: Sample # | COMx (ML) | COMy (AP) | COMz |
+                      Visual_Stim | GVS.
+    The Visual_Stim column is the ground-truth stimulus logged by Unity at
+    each capture frame; FRF analysis uses it directly rather than
+    reconstructing. The GVS column is loaded but not used by the current
+    visual-only protocol.
+
+    Returns
+    -------
+    fs : float, sampling rate in Hz (parsed from header line 4)
+    com_x : ndarray, ML response (matches MATLAB SigOUT convention, col 2)
+    com_y : ndarray, AP response (cross-axis)
+    visual_stim : ndarray, logged visual-scene displacement (MATLAB SigIN, col 5)
+    """
+    _, fs = _read_header_and_fs(path)
+    if fs is None:
+        fs = 100.0
+    data = np.loadtxt(path, skiprows=9)
+    if data.shape[1] < 5:
+        raise ValueError(
+            f"COM file {Path(path).name} has only {data.shape[1]} columns; "
+            f"expected at least 5 (Sample, COMx, COMy, COMz, Visual_Stim)."
+        )
+    com_x       = _interpolate_nans(data[:, 1].astype(float))  # ML
+    com_y       = _interpolate_nans(data[:, 2].astype(float))  # AP
+    visual_stim = _interpolate_nans(data[:, 4].astype(float))
+    return fs, com_x, com_y, visual_stim
+
+
+def load_trial_file(path):
+    """
+    Auto-detect file type from the filename and dispatch to the right loader.
+
+    Returns
+    -------
+    dict with keys:
+        file_type   : 'COP' or 'COM'
+        fs          : sampling rate in Hz
+        signal_ml   : ML response axis
+        signal_ap   : AP response axis
+        stim        : ndarray or None — logged Visual_Stim (COM only).
+                       For COP files this is None; the caller must reconstruct
+                       the stimulus from build_stimulus(amplitude, ...).
+    """
+    parsed = parse_filename(Path(path).name)
+    if parsed is None:
+        raise ValueError(f"Could not parse CAVE filename: {path}")
+    if parsed['file_type'] == 'COP':
+        fs, ml, ap = load_cop_file(path)
+        return {'file_type': 'COP', 'fs': fs,
+                'signal_ml': ml, 'signal_ap': ap, 'stim': None}
+    else:  # COM
+        fs, ml, ap, stim = load_com_file(path)
+        return {'file_type': 'COM', 'fs': fs,
+                'signal_ml': ml, 'signal_ap': ap, 'stim': stim}
 
 
 # -----------------------------------------------------------------------------
@@ -351,50 +490,59 @@ def compute_summary_metrics(cop_x, cop_y, fs):
 # -----------------------------------------------------------------------------
 # Pipeline driver
 # -----------------------------------------------------------------------------
-def analyze_trial(file_path, entry, fs_expected=1000.0):
+def analyze_trial(file_path, entry):
     """
-    Run full analysis on a single COP trial.
+    Run full analysis on a single CAVE trial. The file type is auto-detected
+    from the filename:
 
-    Computes FRF on BOTH axes (AP=COP_Y, ML=COP_X) and per-trial summary
-    metrics. The stimulus-axis-matched FRF (AP for standing, ML for walking)
-    is the primary measure; the cross-axis FRF is included for exploring
-    cross-axis effects.
+      - COP files (standing): force-plate, 1000 Hz, stimulus reconstructed
+                              from the trial amplitude (no logged column).
+      - COM files (walking):  motion-capture, 100 Hz, stimulus taken from the
+                              logged Visual_Stim column.
+
+    FRF is computed on BOTH axes (AP and ML). The `stim_axis` field flags
+    which axis the visual stimulus was applied along — that's the matched
+    axis. The cross-axis FRF is included for diagnostic value.
 
     Returns
     -------
     dict with keys:
-        frf_per_axis : dict[axis, dict] with 'gain', 'phase_deg', 'coherence',
-                        'response_amplitude_m', 'baseline_only', 'frequencies_hz'
-        summary       : dict from compute_summary_metrics
-        stim_axis     : 'AP' or 'ML' (the axis the stimulus moved in)
+        frf_per_axis : dict[axis, dict] with 'gain', 'phase_deg',
+                       'coherence', 'response_amplitude_m', 'baseline_only',
+                       'frequencies_hz'
+        summary      : dict from compute_summary_metrics
+        stim_axis    : 'AP' (standing) or 'ML' (walking) — matched axis
+        file_type    : 'COP' or 'COM' (auto-detected)
+        fs_hz        : sampling rate from the file header
     """
-    fs, cop_x, cop_y = load_cop_file(file_path)
-    if abs(fs - fs_expected) > 1:
-        print(f"  WARN: fs={fs} Hz, expected {fs_expected}")
+    loaded = load_trial_file(file_path)
+    file_type = loaded['file_type']
+    fs        = loaded['fs']
+    signal_ml = loaded['signal_ml']
+    signal_ap = loaded['signal_ap']
 
-    # Truncate to exactly 120 s
+    # Trim or pad to exactly TRIAL_DURATION_S worth of samples at this fs
     n_target = int(TRIAL_DURATION_S * fs)
-    if len(cop_y) > n_target:
-        cop_x = cop_x[:n_target]
-        cop_y = cop_y[:n_target]
-    elif len(cop_y) < n_target:
-        pad = n_target - len(cop_y)
-        cop_x = np.concatenate([cop_x, np.zeros(pad)])
-        cop_y = np.concatenate([cop_y, np.zeros(pad)])
+    signal_ml = _trim_or_pad(signal_ml, n_target)
+    signal_ap = _trim_or_pad(signal_ap, n_target)
 
-    summary = compute_summary_metrics(cop_x, cop_y, fs)
+    # Stimulus comes from the file (COM/walking) or is reconstructed (COP/standing)
+    if file_type == 'COM':
+        stim = _trim_or_pad(loaded['stim'], n_target)
+    else:  # COP — reconstruct from configured sum-of-sines and trial amplitude
+        stim = build_stimulus(entry.amplitude_m, n_target, fs)
+
+    summary = compute_summary_metrics(signal_ml, signal_ap, fs)
     stim_axis = STIM_AXIS_BY_CONDITION.get(entry.condition, 'AP')
-    stim = build_stimulus(entry.amplitude_m, n_target, fs)
 
     frf_per_axis = {}
-    for axis_label, sig in (('AP', cop_y), ('ML', cop_x)):
+    for axis_label, sig in (('AP', signal_ap), ('ML', signal_ml)):
         sig_dem = sig - np.mean(sig)
 
         if entry.amplitude_m == 0:
             # No stimulus: gain/phase undefined. Report baseline sway power.
             N = len(sig_dem)
             Y = np.fft.rfft(sig_dem)
-            f_arr = np.fft.rfftfreq(N, 1/fs)
             bins = [int(round(f0 * N / fs)) for f0 in STIM_FREQS_HZ]
             baseline_amp = np.abs(Y[bins]) * 2 / N
             frf_per_axis[axis_label] = {
@@ -426,48 +574,44 @@ def analyze_trial(file_path, entry, fs_expected=1000.0):
         'frf_per_axis': frf_per_axis,
         'summary':      summary,
         'stim_axis':    stim_axis,
+        'file_type':    file_type,
+        'fs_hz':        fs,
     }
 
 
 def discover_files(root_dir, recursive=True):
     """
-    Find all CAVE COP files under root_dir.
+    Find all CAVE COP and COM files under root_dir.
 
-    Walks the standard nested layout:
-        root_dir/Standing/Control/Acute/CAVE_Control_001_Acute_6_-_COP.txt
-        root_dir/Standing/Control/SubAcute/...
-        root_dir/Walking/Concussion/Chronic/...
+    Walks the standard nested layout, e.g.:
+        root_dir/Standing/Control/Acute/CAVE_Control_001_Acute_6 - COP.txt
+        root_dir/Walking/Concussion/Chronic/CAVE_Concussion_004_Chronic_2 - COM_Export.txt
 
-    The condition (Standing/Walking) is inferred from the path; group, subject,
-    timepoint, and trial number from the filename. Validates that path-implied
-    condition agrees with the one looked up from the trial-order file.
+    Filenames may use either spaces or underscores around the dash, and the
+    text after COP/COM (e.g. '_Export') is ignored. The condition
+    (Standing/Walking) is inferred from the path; group, subject, timepoint,
+    trial number, and file type from the filename.
 
     Parameters
     ----------
     root_dir : str or Path
-        Top-level directory to walk (e.g. the COM Data folder).
+        Top-level directory to walk.
     recursive : bool
         If True (default), walk subdirectories. If False, only check root_dir.
 
     Returns
     -------
     list of dicts with keys: path, group, subject_id, timepoint, trial_number,
-    condition_from_path
+    file_type ('COP' or 'COM'), condition_from_path (or None).
     """
-    pat = re.compile(
-        r'CAVE_(Control|Concussion)_(\d+)_(Acute|SubAcute|Subacute|Chronic)_(\d+)_-_COP\.txt',
-        re.IGNORECASE
-    )
     root = Path(root_dir)
-    paths = root.rglob('CAVE_*_-_COP.txt') if recursive else root.glob('CAVE_*_-_COP.txt')
+    paths = root.rglob('CAVE_*.txt') if recursive else root.glob('CAVE_*.txt')
 
     out = []
     for p in sorted(paths):
-        m = pat.match(p.name)
-        if not m:
+        parsed = parse_filename(p.name)
+        if parsed is None:
             continue
-        group, subj, tp, trial = m.groups()
-        tp = 'SubAcute' if tp.lower() == 'subacute' else tp
 
         # Infer condition from the path (folder name 'Standing' or 'Walking')
         path_parts_lower = [pp.lower() for pp in p.parts]
@@ -478,29 +622,32 @@ def discover_files(root_dir, recursive=True):
             condition_from_path = 'walking'
 
         out.append({
-            'path': p,
-            'group': group,
-            'subject_id': int(subj),
-            'timepoint': tp,
-            'trial_number': int(trial),
+            'path':                p,
+            'group':               parsed['group'],
+            'subject_id':          parsed['subject_id'],
+            'timepoint':           parsed['timepoint'],
+            'trial_number':        parsed['trial_number'],
+            'file_type':           parsed['file_type'],
             'condition_from_path': condition_from_path,
         })
     return out
 
 
-def run_pipeline(cop_dir, trial_order_path,
+def run_pipeline(data_dir, trial_order_path,
                  output_csv=None, summary_csv=None,
                  condition_filter='both', include_baseline=True,
-                 progress_callback=None, cache_path=None):
+                 progress_callback=None, cache_path=None,
+                 cop_dir=None):
     """
-    Discover all COP files under cop_dir, look up each in the trial-order
-    file, run analysis (both-axis FRF + summary metrics), and return two
-    DataFrames.
+    Discover all CAVE data files (COP and COM) under data_dir, look up each
+    in the trial-order file, run analysis (both-axis FRF + summary metrics),
+    and return two DataFrames.
 
     Parameters
     ----------
-    cop_dir : str or Path
-        Top-level directory containing COP files (walked recursively).
+    data_dir : str or Path
+        Top-level directory containing CAVE data files (walked recursively).
+        Walks both Standing/ (COP files) and Walking/ (COM files) subtrees.
     trial_order_path : str or Path
         Path to the trial-order text file.
     output_csv : str or Path or None
@@ -515,13 +662,18 @@ def run_pipeline(cop_dir, trial_order_path,
     cache_path : str or Path or None
         If provided, load existing FRF results from this CSV and only re-process
         files not already in it. Set to None to force full re-run.
+    cop_dir : deprecated alias for data_dir (kept for backward compatibility).
 
     Returns
     -------
     (frf_df, summary_df) : tuple of DataFrames
     """
+    # Back-compat: callers from before the COP/COM split passed cop_dir
+    if cop_dir is not None and data_dir is None:
+        data_dir = cop_dir
+
     entries = parse_trial_order(trial_order_path)
-    files = discover_files(cop_dir, recursive=True)
+    files = discover_files(data_dir, recursive=True)
 
     cached_frf_rows = []
     cached_keys = set()
@@ -557,6 +709,12 @@ def run_pipeline(cop_dir, trial_order_path,
             print(f"  WARN: path says {f['condition_from_path']} but "
                   f"trial-order says {entry.condition} for {f['path'].name}")
 
+        # Cross-check: COP→standing, COM→walking
+        expected_ftype = 'COP' if entry.condition == 'standing' else 'COM'
+        if f['file_type'] != expected_ftype:
+            print(f"  WARN: {f['path'].name} is a {f['file_type']} file but "
+                  f"trial-order says {entry.condition} (expected {expected_ftype})")
+
         if condition_filter != 'both' and entry.condition != condition_filter:
             continue
         if not include_baseline and entry.amplitude_m == 0:
@@ -582,6 +740,8 @@ def run_pipeline(cop_dir, trial_order_path,
             'condition':    entry.condition,
             'trial_number': entry.trial_number,
             'amplitude_m':  entry.amplitude_m,
+            'file_type':    result['file_type'],
+            'fs_hz':        result['fs_hz'],
         }
         stim_axis = result['stim_axis']
         for axis_label, axis_result in result['frf_per_axis'].items():
