@@ -20,6 +20,7 @@ from cave_frf import (
     parse_trial_order, lookup_amplitude, run_pipeline, discover_files,
     STIM_FREQS_HZ, COMPONENT_WEIGHTS, TRIAL_DURATION_S,
     STIM_AXIS_BY_CONDITION,
+    load_config, get_active_config, DEFAULT_CONFIG_PATH,
 )
 from cave_frf.plots import (
     plot_gain_phase, plot_coherence, plot_nyquist, plot_spectra,
@@ -55,17 +56,51 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown("### Stimulus model")
-    st.latex(r"D(t) = A \cdot \sum_{i=1}^{4} w_i \, \sin(2\pi f_i t)")
-    freqs_str = ", ".join(f"{f}" for f in STIM_FREQS_HZ)
-    weights_str = ", ".join(f"{w}" for w in COMPONENT_WEIGHTS)
-    st.markdown(
-        f"- frequencies: **{freqs_str} Hz**\n"
-        f"- weights: **{weights_str}**\n"
-        f"- duration: **{TRIAL_DURATION_S:.0f} s**\n"
-        f"- standing → stim AP, analyze COP_Y\n"
-        f"- walking → stim ML, analyze COP_X"
-    )
+
+    # =========================================================
+    # Stimulus configuration panel — collapsible
+    # =========================================================
+    with st.expander("⚙️ Stimulus configuration", expanded=False):
+        active_cfg = get_active_config()
+        study_name = active_cfg.get('study_name', 'unnamed') if active_cfg else 'unnamed'
+        st.caption(f"**Active config:** {study_name}")
+
+        st.latex(r"D(t) = A \cdot \sum_{i=1}^{N} w_i \, \sin(2\pi f_i t + \varphi_i)")
+
+        freqs_str = ", ".join(f"{f}" for f in STIM_FREQS_HZ)
+        weights_str = ", ".join(f"{w}" for w in COMPONENT_WEIGHTS)
+        axis_str = ", ".join(f"{c}→{a}" for c, a in STIM_AXIS_BY_CONDITION.items())
+        st.markdown(
+            f"- N components: **{len(STIM_FREQS_HZ)}**\n"
+            f"- frequencies (Hz): **{freqs_str}**\n"
+            f"- weights: **{weights_str}**\n"
+            f"- duration: **{TRIAL_DURATION_S:.0f} s**\n"
+            f"- axis mapping: **{axis_str}**"
+        )
+
+        st.markdown("**Load a different config file:**")
+        st.caption(
+            "To run on data from a different protocol, point at a YAML config "
+            "matching that study. See `configs/example_other_lab.yaml` for a "
+            "template."
+        )
+        custom_cfg_path = st.text_input(
+            "Path to YAML config",
+            value="",
+            placeholder=str(DEFAULT_CONFIG_PATH),
+            key='custom_cfg_path',
+        )
+        if st.button("Load config", use_container_width=True, key='load_cfg_btn'):
+            try:
+                if custom_cfg_path.strip():
+                    load_config(custom_cfg_path.strip())
+                    st.success(f"Loaded: {custom_cfg_path}")
+                else:
+                    load_config()  # reload default
+                    st.success(f"Reloaded default ({DEFAULT_CONFIG_PATH.name})")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not load config: {e}")
 
     st.markdown("---")
     st.markdown("### Folder layout")
@@ -85,7 +120,7 @@ with st.sidebar:
     st.caption("Point at the top-level folder; subdirectories walked automatically.")
 
     st.markdown("---")
-    st.caption("CAVE FRF · v0.2 · local-only, no data leaves this machine")
+    st.caption("CAVE FRF · v0.4 · local-only, no data leaves this machine")
 
 
 # ---------------------------------------------------------------------------
