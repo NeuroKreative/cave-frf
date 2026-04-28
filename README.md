@@ -10,7 +10,7 @@ Acute / SubAcute / Chronic timepoints, in Standing and Walking conditions.
 
 This pipeline continues the line of sensory-reweighting research developed by
 the Jeka lab (Hwang et al. 2014) and extended in
-[Vanderlinde dos Santos (2019)](#citation) and Dr. jaclyn Cacesse on repetitive head impacts and
+[Vanderlinde dos Santos (2019)](#citation) and Dr. jaclyn Caccese on repetitive head impacts and
 sensory reweighting, applied here to a longitudinal post-concussion design.
 
 ---
