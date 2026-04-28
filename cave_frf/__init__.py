@@ -13,7 +13,10 @@ from .analysis import (
     analyze_trial,
     discover_files,
     run_pipeline,
+    load_config,
+    get_active_config,
+    DEFAULT_CONFIG_PATH,
 )
 from . import plots
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
