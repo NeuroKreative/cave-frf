@@ -1,0 +1,66 @@
+cff-version: 1.2.0
+title: "CAVE Sensory Reweighting (cave-frf)"
+message: >-
+  If you use this pipeline in published work, please cite the
+  foundational methodology (Hwang et al. 2014) and the
+  dissertation (Vanderlinde dos Santos 2019) alongside this
+  repository.
+type: software
+authors:
+  - given-names: Fernando
+    family-names: Vanderlinde dos Santos
+    # affiliation: <add your current affiliation here>
+  - given-names: Jaclyn B.
+    family-names: Caccese
+    affiliation: >-
+      School of Health and Rehabilitation Sciences,
+      The Ohio State University
+    orcid: ""  # add Jaclyn's ORCID here if available
+keywords:
+  - concussion
+  - sensory reweighting
+  - postural control
+  - frequency response function
+  - mTBI
+  - balance
+  - multisensory fusion
+abstract: >-
+  Python pipeline computing frequency response function
+  (gain, phase, coherence) and per-trial summary metrics for
+  postural sway in response to a sum-of-sines visual
+  perturbation. Built for the CAVE Adult Stimulus Factor
+  study (Control vs Concussion, Acute / SubAcute / Chronic
+  timepoints, Standing and Walking conditions). Continues
+  the sensory-reweighting research line of Hwang et al. 2014
+  and Vanderlinde dos Santos 2019.
+references:
+  - type: article
+    authors:
+      - given-names: Sungjae
+        family-names: Hwang
+      - given-names: Peter
+        family-names: Agada
+      - given-names: Tim
+        family-names: Kiemel
+      - given-names: John J.
+        family-names: Jeka
+    title: Dynamic Reweighting of Three Modalities for Sensor Fusion
+    journal: PLoS ONE
+    volume: "9"
+    issue: "1"
+    year: 2014
+    doi: 10.1371/journal.pone.0088132
+  - type: thesis
+    authors:
+      - given-names: Fernando
+        family-names: Vanderlinde dos Santos
+    title: >-
+      The Effect of Repetitive Head Impacts in Sensory
+      Reweighting and Human Balance
+    thesis-type: PhD dissertation
+    institution:
+      name: University of Delaware
+    year: 2019
+    identifiers:
+      - type: other
+        value: "ProQuest 13860200"
