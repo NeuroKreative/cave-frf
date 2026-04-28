@@ -12,6 +12,9 @@ import numpy as np
 from cave_frf import (
     build_stimulus, compute_frf, compute_summary_metrics,
     parse_trial_order, lookup_amplitude,
+    parse_filename, FILENAME_PATTERN,
+    load_cop_file, load_com_file, load_trial_file,
+    analyze_trial, TrialEntry,
     STIM_FREQS_HZ, COMPONENT_WEIGHTS, TRIAL_DURATION_S,
     STIM_AXIS_BY_CONDITION,
 )
@@ -203,6 +206,184 @@ def test_config_validation():
     assert raised, "load_config should raise ValueError on mismatched lengths"
 
     load_config()  # restore default
+
+
+def test_parse_filename_cop_with_spaces():
+    """Vicon's actual COP filename: spaces around dash, plain 'COP' suffix."""
+    p = parse_filename('CAVE_Concussion_001_Acute_6 - COP.txt')
+    assert p is not None
+    assert p['group'] == 'Concussion'
+    assert p['subject_id'] == 1
+    assert p['timepoint'] == 'Acute'
+    assert p['trial_number'] == 6
+    assert p['file_type'] == 'COP'
+
+
+def test_parse_filename_com_export():
+    """Vicon's actual COM filename: spaces around dash, 'COM_Export' suffix."""
+    p = parse_filename('CAVE_Concussion_001_Acute_1 - COM_Export.txt')
+    assert p is not None
+    assert p['file_type'] == 'COM'
+    assert p['trial_number'] == 1
+
+
+def test_parse_filename_underscore_variant():
+    """Older test data sometimes used underscores around the dash."""
+    p = parse_filename('CAVE_Control_001_Acute_6_-_COP.txt')
+    assert p is not None
+    assert p['file_type'] == 'COP'
+    p = parse_filename('CAVE_Control_001_Acute_2_-_COM_Export.txt')
+    assert p is not None
+    assert p['file_type'] == 'COM'
+
+
+def test_parse_filename_subacute_variants():
+    """Both 'SubAcute' and 'Subacute' should parse and normalize."""
+    for tp_in in ('SubAcute', 'Subacute'):
+        p = parse_filename(f'CAVE_Control_002_{tp_in}_3 - COM_Export.txt')
+        assert p is not None
+        assert p['timepoint'] == 'SubAcute'
+
+
+def test_parse_filename_rejects_non_cave():
+    assert parse_filename('random_file.txt') is None
+    assert parse_filename('CAVE_Control_001_Acute_1 - GVS.txt') is None  # wrong suffix
+    assert parse_filename('CAVE_Control_001.txt') is None                 # too short
+
+
+def _write_synthetic_cop_file(path, fs=1000, duration_s=10):
+    """Write a tiny COP-format file for round-trip testing."""
+    n = int(fs * duration_s)
+    t = np.arange(n) / fs
+    cop_x = 0.001 * np.sin(2*np.pi*0.5*t)
+    cop_y = 0.002 * np.sin(2*np.pi*0.5*t)
+    header = (
+        "Caccese - CAVE\t// User ID\n"
+        "12-1-2023\t// Evaluation date\n"
+        "CAVE_Test_001_Acute_6\t01-01-2024\t12:00:00:000\t// Source file\n"
+        f"{float(fs):.3f}\t// Sampling rate\n"
+        f"{float(duration_s):.3f}\t// Data capture period\n"
+        "\n\n\n"
+        "Sample #\tCOP_X\tCOP_Y\t\n"
+    )
+    with open(path, 'w') as f:
+        f.write(header)
+        for i in range(n):
+            f.write(f"{i}\t{cop_x[i]:.6f}\t{cop_y[i]:.6f}\t\n")
+
+
+def _write_synthetic_com_file(path, fs=100, duration_s=10):
+    """Write a tiny COM-format file (6 cols incl. Visual_Stim and GVS)."""
+    n = int(fs * duration_s)
+    t = np.arange(n) / fs
+    comx = 0.05 * np.sin(2*np.pi*0.5*t)
+    comy = 0.7 + 0.001 * t                        # slow drift
+    comz = 0.9 * np.ones(n)
+    visual_stim = 0.10 * np.sin(2*np.pi*0.5*t)    # the input signal
+    gvs = 0.5 * visual_stim                        # what Vicon actually logs
+    header = (
+        "Caccese - CAVE\t// User ID\n"
+        "12-1-2023\t// Evaluation date\n"
+        "CAVE_Test_001_Acute_1\t01-01-2024\t12:00:00:000\t// Source file\n"
+        f"{float(fs):.3f}\t// Sampling rate\n"
+        f"{float(duration_s):.3f}\t// Data capture period\n"
+        "\n\n\n"
+        "Sample #\tCOMx\tCOMy\tCOMz\tVisual_Stim\tGVS\t\n"
+    )
+    with open(path, 'w') as f:
+        f.write(header)
+        for i in range(n):
+            f.write(f"{i}\t{comx[i]:.6f}\t{comy[i]:.6f}\t{comz[i]:.6f}\t"
+                    f"{visual_stim[i]:.6f}\t{gvs[i]:.6f}\t\n")
+
+
+def test_load_cop_file_round_trip():
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        path = f.name
+    try:
+        _write_synthetic_cop_file(path, fs=1000, duration_s=2)
+        fs, cop_x, cop_y = load_cop_file(path)
+        assert fs == 1000.0
+        assert len(cop_x) == 2000
+        assert len(cop_y) == 2000
+        # Amplitudes should match what we wrote (within fp precision)
+        assert 0.0009 < cop_x.max() < 0.0011
+        assert 0.0019 < cop_y.max() < 0.0021
+    finally:
+        os.unlink(path)
+
+
+def test_load_com_file_extracts_stim():
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        path = f.name
+    try:
+        _write_synthetic_com_file(path, fs=100, duration_s=2)
+        fs, com_x, com_y, stim = load_com_file(path)
+        assert fs == 100.0
+        assert len(com_x) == len(com_y) == len(stim) == 200
+        # Visual_Stim should be the 0.10-amplitude sine we wrote
+        assert 0.099 < stim.max() < 0.101
+        # COMx (response) should be the 0.05-amplitude sine
+        assert 0.049 < com_x.max() < 0.051
+        # COMy starts ~0.7 (drift baseline), not zero
+        assert 0.69 < com_y[0] < 0.71
+    finally:
+        os.unlink(path)
+
+
+def test_load_trial_file_dispatches():
+    """load_trial_file should route to COP or COM loader based on filename."""
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as d:
+        cop_path = os.path.join(d, 'CAVE_Control_001_Acute_6 - COP.txt')
+        com_path = os.path.join(d, 'CAVE_Control_001_Acute_1 - COM_Export.txt')
+        _write_synthetic_cop_file(cop_path, fs=1000, duration_s=2)
+        _write_synthetic_com_file(com_path, fs=100, duration_s=2)
+
+        cop_result = load_trial_file(cop_path)
+        com_result = load_trial_file(com_path)
+
+    assert cop_result['file_type'] == 'COP'
+    assert cop_result['fs'] == 1000.0
+    assert cop_result['stim'] is None  # COP files don't log stimulus
+
+    assert com_result['file_type'] == 'COM'
+    assert com_result['fs'] == 100.0
+    assert com_result['stim'] is not None
+    assert len(com_result['stim']) == len(com_result['signal_ml'])
+
+
+def test_analyze_trial_routes_by_filetype():
+    """analyze_trial should produce results from both COP and COM files."""
+    import tempfile, os
+    from cave_frf import analysis as A
+
+    # Build a 120-s trial so the FRF pipeline has its full window
+    with tempfile.TemporaryDirectory() as d:
+        cop_path = os.path.join(d, 'CAVE_Control_001_Acute_6 - COP.txt')
+        com_path = os.path.join(d, 'CAVE_Control_001_Acute_1 - COM_Export.txt')
+        _write_synthetic_cop_file(cop_path, fs=1000,
+                                   duration_s=int(A.TRIAL_DURATION_S))
+        _write_synthetic_com_file(com_path, fs=100,
+                                   duration_s=int(A.TRIAL_DURATION_S))
+
+        # Standing trial — COP
+        e_stand = TrialEntry('Control', 1, 'Acute', 'standing', 6, 0.08)
+        r_stand = analyze_trial(cop_path, e_stand)
+        assert r_stand['file_type'] == 'COP'
+        assert r_stand['fs_hz'] == 1000.0
+        assert r_stand['stim_axis'] == 'AP'
+        assert set(r_stand['frf_per_axis'].keys()) == {'AP', 'ML'}
+
+        # Walking trial — COM
+        e_walk = TrialEntry('Control', 1, 'Acute', 'walking', 1, 0.25)
+        r_walk = analyze_trial(com_path, e_walk)
+        assert r_walk['file_type'] == 'COM'
+        assert r_walk['fs_hz'] == 100.0
+        assert r_walk['stim_axis'] == 'ML'
+        assert set(r_walk['frf_per_axis'].keys()) == {'AP', 'ML'}
 
 
 if __name__ == '__main__':
