@@ -52,7 +52,7 @@ fi
 VENV_PY="$VENV_DIR/bin/python"
 
 # Install deps if needed
-if ! "$VENV_PY" -c "import streamlit, numpy, pandas, matplotlib" 2>/dev/null; then
+if ! "$VENV_PY" -c "import streamlit, numpy, pandas, matplotlib, yaml" 2>/dev/null; then
     echo "Installing dependencies (~1 minute)..."
     "$VENV_PY" -m pip install --quiet --upgrade pip
     "$VENV_PY" -m pip install --quiet -r requirements.txt
