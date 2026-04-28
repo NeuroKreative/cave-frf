@@ -47,10 +47,12 @@ if not exist ".venv\Scripts\python.exe" (
     )
 )
 
-REM Install dependencies if needed
-.venv\Scripts\python.exe -c "import streamlit, numpy, pandas, matplotlib" >nul 2>&1
+REM Install or update dependencies if any are missing.
+REM We check ALL required imports here so that adding a new requirement
+REM in requirements.txt is detected on next launch and triggers reinstall.
+.venv\Scripts\python.exe -c "import streamlit, numpy, pandas, matplotlib, yaml" >nul 2>&1
 if errorlevel 1 (
-    echo Installing dependencies, please wait ^(about 1 minute^)...
+    echo Installing or updating dependencies, please wait ^(about 1 minute^)...
     .venv\Scripts\python.exe -m pip install --quiet --upgrade pip
     .venv\Scripts\python.exe -m pip install --quiet -r requirements.txt
     if errorlevel 1 (
@@ -64,8 +66,7 @@ if errorlevel 1 (
     echo Dependencies installed.
 )
 
-REM Suppress Streamlit's first-run email prompt by pre-creating credentials.
-REM This only writes the file if it doesn't already exist.
+REM Suppress Streamlit's first-run email prompt
 if not exist "%USERPROFILE%\.streamlit\credentials.toml" (
     if not exist "%USERPROFILE%\.streamlit" mkdir "%USERPROFILE%\.streamlit"
     > "%USERPROFILE%\.streamlit\credentials.toml" echo [general]
