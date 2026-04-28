@@ -64,6 +64,14 @@ if errorlevel 1 (
     echo Dependencies installed.
 )
 
+REM Suppress Streamlit's first-run email prompt by pre-creating credentials.
+REM This only writes the file if it doesn't already exist.
+if not exist "%USERPROFILE%\.streamlit\credentials.toml" (
+    if not exist "%USERPROFILE%\.streamlit" mkdir "%USERPROFILE%\.streamlit"
+    > "%USERPROFILE%\.streamlit\credentials.toml" echo [general]
+    >> "%USERPROFILE%\.streamlit\credentials.toml" echo email = ""
+)
+
 echo.
 echo =====================================================================
 echo   Launching CAVE FRF UI
