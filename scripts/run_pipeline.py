@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from cave_frf import run_pipeline, discover_files
+from cave_frf import run_pipeline, discover_files, load_config
 from cave_frf.plots import (
     plot_gain_phase, plot_coherence, plot_nyquist, plot_spectra,
     plot_hwang_recovery, plot_summary_metrics,
@@ -45,6 +45,9 @@ def main():
     p = argparse.ArgumentParser(
         description="Run CAVE gain/phase analysis on a folder of COP files."
     )
+    p.add_argument('--config',
+                   help="Path to a YAML experiment config "
+                        "(default: configs/cave.yaml)")
     p.add_argument('--data-dir', required=True,
                    help="Top-level data folder (e.g. 'COM Data')")
     p.add_argument('--trial-order', required=True,
@@ -66,6 +69,10 @@ def main():
                    choices=['stim_matched', 'AP', 'ML'],
                    help="Axis for FRF plots (default: stim_matched)")
     args = p.parse_args()
+
+    if args.config:
+        load_config(args.config)
+        print(f"Loaded config: {args.config}")
 
     cache = None if args.no_cache else args.frf_csv
 
