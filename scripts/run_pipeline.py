@@ -43,13 +43,15 @@ from cave_frf.plots import (
 
 def main():
     p = argparse.ArgumentParser(
-        description="Run CAVE gain/phase analysis on a folder of COP files."
+        description="Run CAVE gain/phase analysis on a folder of CAVE data "
+                    "files (COP for standing, COM for walking — auto-detected)."
     )
     p.add_argument('--config',
                    help="Path to a YAML experiment config "
                         "(default: configs/cave.yaml)")
     p.add_argument('--data-dir', required=True,
-                   help="Top-level data folder (e.g. 'COM Data')")
+                   help="Top-level data folder containing both Standing/ "
+                        "(COP files) and Walking/ (COM files) subtrees.")
     p.add_argument('--trial-order', required=True,
                    help="Path to the trial-order text file")
     p.add_argument('--frf-csv', required=True,
@@ -77,7 +79,7 @@ def main():
     cache = None if args.no_cache else args.frf_csv
 
     frf_df, summary_df = run_pipeline(
-        cop_dir=args.data_dir,
+        data_dir=args.data_dir,
         trial_order_path=args.trial_order,
         output_csv=args.frf_csv,
         summary_csv=args.summary_csv,
