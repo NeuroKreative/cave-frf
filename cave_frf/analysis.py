@@ -637,7 +637,8 @@ def run_pipeline(data_dir, trial_order_path,
                  output_csv=None, summary_csv=None,
                  condition_filter='both', include_baseline=True,
                  progress_callback=None, cache_path=None,
-                 cop_dir=None):
+                 cop_dir=None,
+                 diagnostics_callback=None):
     """
     Discover all CAVE data files (COP and COM) under data_dir, look up each
     in the trial-order file, run analysis (both-axis FRF + summary metrics),
@@ -661,8 +662,16 @@ def run_pipeline(data_dir, trial_order_path,
     progress_callback : callable(i, n, name) or None
     cache_path : str or Path or None
         If provided, load existing FRF results from this CSV and only re-process
-        files not already in it. Set to None to force full re-run.
+        files not already in it. Set to None to force full re-run. The cache
+        is filtered by `condition_filter` on load — cached rows from a
+        different condition than the one being requested are ignored, so
+        a stale walking cache can never leak into a standing output.
     cop_dir : deprecated alias for data_dir (kept for backward compatibility).
+    diagnostics_callback : callable(diagnostics_dict) or None
+        If provided, called once at the end with a dict containing
+        per-file outcome counts and a list of skipped files. The same
+        information is also printed to stdout. Lets the Streamlit UI
+        display a structured "what happened" panel after each run.
 
     Returns
     -------
@@ -675,10 +684,28 @@ def run_pipeline(data_dir, trial_order_path,
     entries = parse_trial_order(trial_order_path)
     files = discover_files(data_dir, recursive=True)
 
+    # ------------------------------------------------------------------
+    # Cache load — FILTERED by condition_filter
+    #
+    # Previously: all cached rows were loaded into the output unconditionally.
+    # That meant a "standing" run after a "walking" run would re-emit the
+    # walking rows from the cache, even when zero standing files actually
+    # got processed. The output looked like a successful walking run because
+    # it WAS the walking run, just relabeled "standing" by user intent.
+    # The filter below makes the cache respect condition_filter so only
+    # rows matching the requested condition survive.
+    # ------------------------------------------------------------------
     cached_frf_rows = []
     cached_keys = set()
+    n_cache_loaded = 0
+    n_cache_dropped_wrong_condition = 0
     if cache_path is not None and Path(cache_path).exists():
         cached_df = pd.read_csv(cache_path)
+        n_cache_loaded = len(cached_df)
+        if condition_filter != 'both':
+            mask = cached_df['condition'] == condition_filter
+            n_cache_dropped_wrong_condition = int((~mask).sum())
+            cached_df = cached_df[mask]
         cached_frf_rows = cached_df.to_dict('records')
         cached_keys = {(r['group'], r['subject_id'], r['timepoint'],
                          r['condition'], r['trial_number'])
@@ -686,13 +713,43 @@ def run_pipeline(data_dir, trial_order_path,
 
     cached_summary_rows = []
     if summary_csv is not None and Path(summary_csv).exists():
-        cached_summary_rows = pd.read_csv(summary_csv).to_dict('records')
+        cached_summary_df = pd.read_csv(summary_csv)
+        if condition_filter != 'both':
+            cached_summary_df = cached_summary_df[
+                cached_summary_df['condition'] == condition_filter
+            ]
+        cached_summary_rows = cached_summary_df.to_dict('records')
 
     frf_rows = list(cached_frf_rows)
     summary_rows = list(cached_summary_rows)
-    n_processed = 0
-    n_skipped = 0
     n_total = len(files)
+
+    # ------------------------------------------------------------------
+    # Per-file outcome tracking
+    #
+    # Every discovered file falls into exactly one of these buckets. The
+    # buckets become a structured diagnostic at the end of the run, so
+    # silent failures (the original symptom that produced misleading
+    # standing output) are no longer possible.
+    # ------------------------------------------------------------------
+    outcomes = {
+        'processed':                  0,  # ran analyze_trial, added to output
+        'cache_hit':                  0,  # already in cache, skipped re-analysis
+        'skipped_no_trial_order':     0,  # filename parsed but no trial-order match
+        'skipped_wrong_condition':    0,  # entry.condition != condition_filter
+        'skipped_baseline':           0,  # amp=0 and include_baseline=False
+        'errored':                    0,  # analyze_trial raised
+    }
+    # Detailed list of every file that didn't make it through to processed/cache_hit.
+    # Each entry is (path_name, reason, detail).
+    skipped_files = []
+
+    # Discovery breakdown (independent of run outcome — what did discover_files see?)
+    discovery_breakdown = {}  # {(condition_from_path, file_type): count}
+    for f in files:
+        key = (f['condition_from_path'] or '(no Standing/Walking folder)',
+                f['file_type'])
+        discovery_breakdown[key] = discovery_breakdown.get(key, 0) + 1
 
     for i, f in enumerate(files):
         if progress_callback is not None:
@@ -701,7 +758,12 @@ def run_pipeline(data_dir, trial_order_path,
         entry = lookup_amplitude(entries, f['group'], f['subject_id'],
                                   f['timepoint'], f['trial_number'])
         if entry is None:
-            n_skipped += 1
+            outcomes['skipped_no_trial_order'] += 1
+            skipped_files.append((
+                f['path'].name,
+                'no_trial_order_match',
+                f"no entry for {f['group']}/{f['subject_id']}/{f['timepoint']}/trial {f['trial_number']}",
+            ))
             continue
 
         if (f['condition_from_path'] is not None
@@ -716,21 +778,37 @@ def run_pipeline(data_dir, trial_order_path,
                   f"trial-order says {entry.condition} (expected {expected_ftype})")
 
         if condition_filter != 'both' and entry.condition != condition_filter:
+            outcomes['skipped_wrong_condition'] += 1
+            skipped_files.append((
+                f['path'].name,
+                'wrong_condition',
+                f"trial-order says condition='{entry.condition}', "
+                f"filter='{condition_filter}'",
+            ))
             continue
         if not include_baseline and entry.amplitude_m == 0:
+            outcomes['skipped_baseline'] += 1
+            skipped_files.append((
+                f['path'].name,
+                'baseline_excluded',
+                'amplitude=0 and include_baseline=False',
+            ))
             continue
 
         key = (entry.group, entry.subject_id, entry.timepoint,
                 entry.condition, entry.trial_number)
         if key in cached_keys:
+            outcomes['cache_hit'] += 1
             continue
 
         try:
             result = analyze_trial(f['path'], entry)
         except Exception as e:
+            outcomes['errored'] += 1
+            skipped_files.append((f['path'].name, 'analyze_trial_error', str(e)))
             print(f"  ERROR analyzing {f['path'].name}: {e}")
             continue
-        n_processed += 1
+        outcomes['processed'] += 1
 
         # FRF rows: one per (frequency, axis)
         meta = {
@@ -772,7 +850,54 @@ def run_pipeline(data_dir, trial_order_path,
     if summary_csv is not None and not summary_df.empty:
         summary_df.to_csv(summary_csv, index=False)
 
-    print(f"Discovered {n_total} files; processed {n_processed} new, "
-          f"reused {len(cached_frf_rows)//8 if cached_frf_rows else 0} cached, "
-          f"skipped {n_skipped}.")
+    # ------------------------------------------------------------------
+    # End-of-run diagnostics
+    #
+    # Always printed, also passed to diagnostics_callback if provided.
+    # When zero standing files survive a "standing" run, this is what
+    # tells you immediately why — instead of having to guess from a CSV
+    # that looks suspiciously like a previous walking output.
+    # ------------------------------------------------------------------
+    diagnostics = {
+        'n_discovered':                  n_total,
+        'discovery_breakdown':           discovery_breakdown,
+        'condition_filter':              condition_filter,
+        'include_baseline':              include_baseline,
+        'cache_path':                    str(cache_path) if cache_path else None,
+        'n_cache_loaded':                n_cache_loaded,
+        'n_cache_dropped_wrong_condition': n_cache_dropped_wrong_condition,
+        'outcomes':                      outcomes,
+        'skipped_files':                 skipped_files,
+        'n_frf_rows_out':                len(frf_rows),
+        'n_summary_rows_out':            len(summary_rows),
+    }
+
+    print("─" * 70)
+    print(f"CAVE pipeline run summary  (condition_filter={condition_filter})")
+    print("─" * 70)
+    print(f"Discovered {n_total} files. Discovery breakdown:")
+    for (cond, ftype), n in sorted(discovery_breakdown.items()):
+        print(f"    {cond:>40s}  {ftype:>3s}  ×  {n}")
+    if cache_path is not None:
+        print(f"Cache: loaded {n_cache_loaded} rows from {cache_path}; "
+              f"dropped {n_cache_dropped_wrong_condition} not matching "
+              f"condition_filter='{condition_filter}'.")
+    print("Per-file outcomes:")
+    for name, n in outcomes.items():
+        print(f"    {name:>30s}  {n}")
+    if skipped_files:
+        print(f"Skipped files (showing up to 10 of {len(skipped_files)}):")
+        for name, reason, detail in skipped_files[:10]:
+            print(f"    [{reason}]  {name}  —  {detail}")
+        if len(skipped_files) > 10:
+            print(f"    ... and {len(skipped_files) - 10} more")
+    print(f"Output: {len(frf_rows)} FRF rows, {len(summary_rows)} summary rows.")
+    print("─" * 70)
+
+    if diagnostics_callback is not None:
+        try:
+            diagnostics_callback(diagnostics)
+        except Exception as e:
+            print(f"  WARN: diagnostics_callback raised: {e}")
+
     return frf_df, summary_df
